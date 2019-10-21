@@ -15,6 +15,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include "ApolloSM_Exceptions/ApolloSM_Exceptions.hh"
  
 /*DEBUGGING*/
 #define DEBUG
@@ -184,8 +185,14 @@ int SVFPlayer::play(std::string const & svfFile , std::string const & XVCReg) {
 
   //open SVF file
   f = fopen(svfFile.c_str(),"rb"); //swith to take path in
-  if (f == NULL) {fprintf(stderr, "failed to open path\n");}
-  else {fprintf(stderr, "playing %s\n", svfFile.c_str());}
+  if (f == NULL) {
+    fprintf(stderr, "failed to open path\n");
+    BUException::FILE_ERROR fe;
+    fe.Append("Failed to open path\n");
+    throw fe;
+  } else {
+    fprintf(stderr, "playing %s\n", svfFile.c_str());
+  }
 
   //set Tap State
   tap_state = LIBXSVF_TAP_INIT;
@@ -193,8 +200,13 @@ int SVFPlayer::play(std::string const & svfFile , std::string const & XVCReg) {
   //Run setup
   if (setup(XVCReg) < 0) {
     fprintf(stderr, "Setup of JTAG interface failed.\n");
+    BUException::JTAG_ERROR je;
+    je.Append("Setup of JTAG interface failed.\n");
+    throw je;
     return -1;
-  } else {fprintf(stderr, "JTAG setup succesful\n");}
+  } else {
+    fprintf(stderr, "JTAG setup succesful\n");
+  }
 
   //Run svf player
   int rc = svf_reader();
@@ -203,6 +215,9 @@ int SVFPlayer::play(std::string const & svfFile , std::string const & XVCReg) {
   //Run shutdown
   if (shutdown() < 0) {
     fprintf(stderr, "Shutdown of JTAG interface failed.\n");
+    BUException::JTAG_ERROR je;
+    je.Append("Shutdown of JTAG interface failed.\n");
+    throw je;    
     return -1;
   } else {
     fprintf(stderr, "JTAG shtdown succesful.\n");
@@ -211,6 +226,15 @@ int SVFPlayer::play(std::string const & svfFile , std::string const & XVCReg) {
     fprintf(stderr, "Recieved %d significant tdo bits.\n", bitcount_tdo);
 #endif
   }
+
+  // Close file
+  if(0 != fclose(f)) {
+    BUException::FILE_ERROR fe;
+    fe.Append("File failed to close\n");
+    throw fe;
+    return -1;
+  }
+
   return rc;
 }
 
