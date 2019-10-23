@@ -9,6 +9,8 @@
 //TCLAP parser
 #include <tclap/CmdLine.h>
 
+#define SEC_TO_USEC 1000000
+
 // ====================================================================================================
 // Kill program if it is in background
 bool static volatile loop;
@@ -173,7 +175,7 @@ int main(int argc, char** argv) {
 
   while(loop) {
     strOut = SM->GenerateHTMLStatus(file, verbosity, type);
-    usleep(30*1000000); // 30 seconds
+    usleep(30*SEC_TO_USEC); // 30 seconds
   }
   
   // Restore old actions of receiving SIGINT and SIGTERM (which is to kill program) before returning
