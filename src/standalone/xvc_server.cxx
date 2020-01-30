@@ -39,11 +39,14 @@
 
 #include <ApolloSM/uioLabelFinder.hh>
 
+#include <sys/file.h> // for lock file
+
 //extern int errno;
 
 #define DEFAULT_RUN_DIR     "/opt/address_tables/"
 #define DEFAULT_PID_FILE    "/var/run/"
 
+#define DEFAULT_LOCK_FILE "/var/lock/sm_boot.lock"
 
 // ====================================================================================================
 // signal handling
@@ -261,6 +264,36 @@ int main(int argc, char **argv) {
   //now that we know the port, setup the log
   char daemonName[] = "xvc_server.XXXXXY"; //The 'Y' is so strlen is properly padded
   snprintf(daemonName,strlen(daemonName),"xvc_server.%u",port);
+
+  // ============================================================================
+  // Open log for logging info
+
+  
+  openlog(daemonName,LOG_PERROR|LOG_PID|LOG_ODELAY,LOG_DAEMON);
+  syslog(LOG_INFO,"starting %s", daemonName);
+
+  // ============================================================================
+  // Lock the lock file
+
+  // Open the lock file or create it if it does not
+  int lockfd = open(DEFAULT_LOCK_FILE, O_CREAT | O_RDWR, 0644); // Just O_RDONLY, 0444 would probably suffice.
+  if(0 > lockfd) {
+    syslog(LOG_ERR,"could not open lock file: %s\n", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  // lock the lock file
+  if(0 > flock(lockfd, LOCK_EX | LOCK_NB)) {
+    syslog(LOG_ERR,"could not lock lock file: %s\n", strerror(errno));
+    exit(EXIT_FAILURE);
+  } 
+
+  std::string pidFileName = DEFAULT_PID_FILE;
+  pidFileName+=daemonName;
+  pidFileName+=".pid";
+ 
+  // "w" will truncate (aka recreate) an existing pid file or create one if it does not exist 
+  FILE * pidFile = fopen(pidFileName.c_str(),"w");
   
   // ============================================================================
   // Deamon book-keeping
@@ -272,10 +305,10 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
   }else if(pid > 0){
     //We are the parent and created a child with pid pid
-    std::string pidFileName = DEFAULT_PID_FILE;
-    pidFileName+=daemonName;
-    pidFileName+=".pid";
-    FILE * pidFile = fopen(pidFileName.c_str(),"w");
+//    std::string pidFileName = DEFAULT_PID_FILE;
+//    pidFileName+=daemonName;
+//    pidFileName+=".pid";
+//    FILE * pidFile = fopen(pidFileName.c_str(),"w");
     fprintf(pidFile,"%d\n",pid);
     fclose(pidFile);
     exit(EXIT_SUCCESS);
@@ -286,9 +319,6 @@ int main(int argc, char **argv) {
   
   //Change the file mode mask to allow read/write
   umask(0);
-  
-  openlog(daemonName,LOG_PERROR|LOG_PID|LOG_ODELAY,LOG_DAEMON);
-  syslog(LOG_INFO,"starting %s", daemonName);
   
 
   // create new SID for the daemon.
@@ -491,6 +521,21 @@ int main(int argc, char **argv) {
   // Restore old action of receiving SIGINT (which is to kill program) before returning 
   sigaction(SIGINT, &old_sa, NULL);
   syslog(LOG_INFO,"%s Daemon ended\n",daemonName);
+
+  // unlock lock file
+  if(0 > flock(lockfd, LOCK_UN)) {
+    syslog(LOG_ERR, "Cannot unlock lock file: %s\n", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  // If a process manages to open the lock file before it is unlinked, there may be a race condition
+  // http://www.guido-flohr.net/never-delete-your-pid-file/
+
+  // unlink lock file
+  if(0 > unlink(DEFAULT_LOCK_FILE)) {
+    syslog(LOG_ERR, "Cannot unlink lock file: %s\n", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
 
   return 0;
 }

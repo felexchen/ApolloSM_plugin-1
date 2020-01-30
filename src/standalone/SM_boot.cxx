@@ -21,7 +21,7 @@
 
 #include <syslog.h>  ///for syslog
 
-#include <sys/file.h>
+#include <sys/file.h> // for lock file
 
 #define SEC_IN_US  1000000
 #define NS_IN_US 1000
@@ -33,7 +33,7 @@
 #define DEFAULT_PID_FILE    "/var/run/sm_boot.pid"
 #define DEFAULT_POWERUP_TIME 5
 
-#define LOCK_FILE "sm_boot.lock"
+#define DEFAULT_LOCK_FILE "/var/lock/sm_boot.lock"
 
 // ====================================================================================================
 // signal handling
@@ -211,12 +211,18 @@ int main(int argc, char** argv) {
 
 
   // ============================================================================
-  // Deamon book-keeping
+  // Open log for logging info
   
   openlog(NULL,LOG_CONS|LOG_PID,LOG_DAEMON);
 
+  //Start logging
+  syslog(LOG_INFO,"Opened log file\n");
+
+  // ============================================================================
+  // Lock the lock file
+
   // Open the lock file or create it if it does not
-  int lockfd = open(LOCK_FILE, O_CREAT | O_RDWR, 0644); // Just O_RDONLY, 0444 would probably suffice.
+  int lockfd = open(DEFAULT_LOCK_FILE, O_CREAT | O_RDWR, 0644); // Just O_RDONLY, 0444 would probably suffice.
   if(0 > lockfd) {
     syslog(LOG_ERR,"could not open lock file: %s\n", strerror(errno));
     exit(EXIT_FAILURE);
@@ -230,6 +236,9 @@ int main(int argc, char** argv) {
  
   // "w" will truncate (aka recreate) an existing pid file or create one if it does not exist 
   FILE * pidFile = fopen(pidFileName.getValue().c_str(),"w");
+
+  // ============================================================================
+  // Deamon book-keeping
 
   // Make a child
   pid_t pid, sid;
@@ -255,9 +264,6 @@ int main(int argc, char** argv) {
   
   //Change the file mode mask to allow read/write
   umask(0);
-
-  //Start logging
-  syslog(LOG_INFO,"Opened log file\n");
 
   // create new SID for the daemon.
   sid = setsid();
@@ -505,7 +511,7 @@ int main(int argc, char** argv) {
   // http://www.guido-flohr.net/never-delete-your-pid-file/
 
   // unlink lock file
-  if(0 > unlink(LOCK_FILE)) {
+  if(0 > unlink(DEFAULT_LOCK_FILE)) {
     syslog(LOG_ERR, "Cannot unlink lock file: %s\n", strerror(errno));
     exit(EXIT_FAILURE);
   }

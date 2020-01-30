@@ -20,6 +20,8 @@
 
 #include <syslog.h>  ///for syslog
 
+#include <sys/file.h> // for lock file
+
 #define SEC_IN_US  1000000
 #define NS_IN_US 1000
 
@@ -31,6 +33,8 @@
 #define DEFAULT_OUTFILE     "/var/www/lighttpd/index.html"
 #define DEFAULT_LOG_LEVEL   1
 #define DEFAULT_OUTPUT_TYPE "HTML"
+
+#define DEFAULT_LOCK_FILE "/var/lock/htmlStatus.lock"
 
 // ====================================================================================================
 // signal handling
@@ -97,7 +101,35 @@ int main(int argc, char** argv) {
   }
 
   // ============================================================================
+  // Open log for logging info
+  
+  openlog(NULL,LOG_CONS|LOG_PID,LOG_DAEMON);
+
+  //Start logging
+  syslog(LOG_INFO,"Opened log file\n");
+
+  // ============================================================================
+  // Lock the lock file
+
+  // Open the lock file or create it if it does not
+  int lockfd = open(DEFAULT_LOCK_FILE, O_CREAT | O_RDWR, 0644); // Just O_RDONLY, 0444 would probably suffice.
+  if(0 > lockfd) {
+    syslog(LOG_ERR,"could not open lock file: %s\n", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  // lock the lock file
+  if(0 > flock(lockfd, LOCK_EX | LOCK_NB)) {
+    syslog(LOG_ERR,"could not lock lock file: %s\n", strerror(errno));
+    exit(EXIT_FAILURE);
+  } 
+ 
+  // "w" will truncate (aka recreate) an existing pid file or create one if it does not exist 
+  FILE * pidFile = fopen(pidFileName.getValue().c_str(),"w");
+
+  // ============================================================================
   // Deamon book-keeping
+
   pid_t pid, sid;
   pid = fork();
   if(pid < 0){
@@ -106,22 +138,21 @@ int main(int argc, char** argv) {
     exit(EXIT_FAILURE);
   }else if(pid > 0){
     //We are the parent and created a child with pid pid
-    FILE * pidFile = fopen(pidFileName.getValue().c_str(),"w");
     fprintf(pidFile,"%d\n",pid);
     fclose(pidFile);
     exit(EXIT_SUCCESS);
   }else{
     // I'm the child!
     //open syslog
-    openlog(NULL,LOG_CONS|LOG_PID,LOG_DAEMON);
+    //    openlog(NULL,LOG_CONS|LOG_PID,LOG_DAEMON);
   }
 
+  // child here only
+  // close pidfile
+  fclose(pidFile);
   
   //Change the file mode mask to allow read/write
   umask(0);
-
-  //Start logging
-  syslog(LOG_INFO,"Opened log file\n");
 
   // create new SID for the daemon.
   sid = setsid();
@@ -292,7 +323,21 @@ int main(int argc, char** argv) {
   // Restore old action of receiving SIGINT (which is to kill program) before returning 
   sigaction(SIGINT, &old_sa, NULL);
   syslog(LOG_INFO,"htmlStatus Daemon ended\n");
-  
+
+  // unlock lock file
+  if(0 > flock(lockfd, LOCK_UN)) {
+    syslog(LOG_ERR, "Cannot unlock lock file: %s\n", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  // If a process manages to open the lock file before it is unlinked, there may be a race condition
+  // http://www.guido-flohr.net/never-delete-your-pid-file/
+
+  // unlink lock file
+  if(0 > unlink(DEFAULT_LOCK_FILE)) {
+    syslog(LOG_ERR, "Cannot unlink lock file: %s\n", strerror(errno));
+    exit(EXIT_FAILURE);
+  }  
 
   return 0;
 }
