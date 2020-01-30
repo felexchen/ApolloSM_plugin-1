@@ -21,6 +21,8 @@
 
 #include <syslog.h>  ///for syslog
 
+#include <sys/file.h>
+
 #define SEC_IN_US  1000000
 #define NS_IN_US 1000
 
@@ -214,7 +216,7 @@ int main(int argc, char** argv) {
   openlog(NULL,LOG_CONS|LOG_PID,LOG_DAEMON);
 
   // Open the lock file or create it if it does not
-  int lockfd = open(LOCK_FILE, O_CREATE | O_RDWR, 0644); // Just O_RDONLY, 0444 would probably suffice.
+  int lockfd = open(LOCK_FILE, O_CREAT | O_RDWR, 0644); // Just O_RDONLY, 0444 would probably suffice.
   if(0 > lockfd) {
     syslog(LOG_ERR,"could not open lock file: %s\n", strerror(errno));
     exit(EXIT_FAILURE);
@@ -234,7 +236,7 @@ int main(int argc, char** argv) {
   pid = fork();
   if(pid < 0){
     //Something went wrong.
-    syslog(LOG_ERR,"could not fork a child: %s\n" strerror(errno));
+    syslog(LOG_ERR,"could not fork a child: %s\n", strerror(errno));
     exit(EXIT_FAILURE);
   }else if(pid > 0){
     //We are the parent and created a child with pid pid
