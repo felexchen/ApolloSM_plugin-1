@@ -21,6 +21,8 @@
 
 #include <syslog.h>  ///for syslog
 
+#include <sstream> // for stringstream
+
 #define SEC_IN_US  1000000
 #define NS_IN_US 1000
 
@@ -66,40 +68,9 @@ boost::program_options::variables_map loadConfig(std::string const & configFileN
 }
 
 // // ====================================================================================================
-// // Function to set the parameter by parsing the command line. In particular, we ensure that the command line default does not override config options obtained from the config file.
-// void setParam(void * param, std::string paramString, boost::program_options::variables_map vm, bool param_from_config) {
-//   
-//   // Set parameter but make sure that the command line default does not override config options obtained from the config file. Every parameter must go through this nested if statement sequence.
-//   
-//   // Set parameter
-//   if(vm.count(paramString)) {
-//     // The parameter exists, but was it defaulted?
-//     if(vm[paramString].defaulted()) {
-//       // We have a defaulted parameter, but do we have a config option obtained from the config file?
-//       if(param_from_config) {
-// 	// We have a config option obtained from the config file. Do nothing
-// 	syslog(LOG_INFO, "Setting %s to (CONFIG FILE)\n", paramString);
-// 	return;
-//       } else {
-// 	// We do not have a config option obtained from the config file. Our default can be used.
-// 	*param = vm[paramString].as<typeof(*param)>();	
-// 	syslog(LOG_INFO, "Setting %s to (DEFAULT)\n", paramString);
-// 	return;
-//       } 
-//     } else { 
-//       // We have a non-defaulted parameter option set from the command line! This trumps everything
-//       *param = vm[paramString].as<typeof(*param)>();      
-//       syslog(LOG_INFO, "Setting %s to (COMMAND LINE)\n", paramString);
-//       return;
-//     }
-//   }
-//   
-// }
-
-// Function to add parameters/options. Saves a few lines of code. Not necessary.
+// Function to add parameters/options to both file and command line options. Saves a few lines of code. Not necessary.
 template <class T>
 void setOption(boost::program_options::options_description * fileOptions, boost::program_options::options_description * commandLineOptions, std::string paramName, std::string paramDesc, T /*param*/) {
-  //void setOption(boost::program_options::options_description options, std::string paramName, std::string paramDesc, T /*param*/) {
   // It's hacky to pass the parameter to this function solely to use its type. May be a better way
   (*fileOptions).add_options()
     (paramName.c_str(),
@@ -109,19 +80,29 @@ void setOption(boost::program_options::options_description * fileOptions, boost:
     (paramName.c_str(),
      boost::program_options::value<T>(),
      paramDesc.c_str());
-//  (*options).add_options()
-//    (paramName.c_str(),
-//     boost::program_options::value<T>(),
-//     paramDesc.c_str());
 }
 
 template <class T>
-// Log what the parameter value was set to and where it came fro
+// Function to log what the parameter value was set to and where it came from
 void paramLog(std::string paramName, T paramValue, std::string where, bool logToSyslog) {
+  // To print almost any type (ints, etc) as strings
   std::stringstream ss;
   std::string str;
   ss << paramValue;
   ss >> str;
+  
+  // for printing bools
+  std::string bStr("b");
+  if(!bStr.compare(typeid(paramValue).name())) {
+    // T is bool
+    if(logToSyslog) {
+      syslog(LOG_INFO, "%s was set to: %s %s\n", paramName.c_str(), (!str.compare("1")) ? "true" : "false", where.c_str()); 
+    } else {
+      fprintf(stdout, "%s was set to: %s %s\n", paramName.c_str(), (!str.compare("1")) ? "true" : "false", where.c_str()); 
+    }
+    return;
+  }
+
   if(logToSyslog) {
     syslog(LOG_INFO, "%s was set to: %s %s\n", paramName.c_str(), str.c_str(), where.c_str()); 
   } else {
@@ -129,6 +110,7 @@ void paramLog(std::string paramName, T paramValue, std::string where, bool logTo
   }
 }
 
+// Function to set the parameter value
 template <class T>
 void setParamValue(T * param, std::string paramName, boost::program_options::variables_map configFileVM, boost::program_options::variables_map commandLineVM, bool logToSyslog) {
   // The order of precedence is: command line specified, config file specified, default
@@ -150,7 +132,6 @@ void setParamValue(T * param, std::string paramName, boost::program_options::var
   // Parameter not specified anywhere, keep default
   paramLog(paramName, *param, "(DEFAULT)", logToSyslog);
   return;
-
 }
 // ====================================================================================================
 long us_difftime(struct timespec cur, struct timespec end){ 
@@ -324,7 +305,7 @@ int main(int argc, char** argv) {
     // parse command line
     boost::program_options::store(boost::program_options::parse_command_line(argc, argv, commandLineOptions), commandLineVM);
   } catch(const boost::program_options::error &ex) {
-    fprintf(stderr, "Caught exception while parsing command line: %s \nTerminating SM_boot\n", ex.what());       
+    fprintf(stderr, "Caught exception while parsing command line: %s. Try (--). ie. --polltime\nTerminating SM_boot\n", ex.what());       
     return -1;
   }
 
