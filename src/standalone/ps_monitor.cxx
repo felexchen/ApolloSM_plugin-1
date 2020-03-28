@@ -1,15 +1,26 @@
+#include <utmpx.h>
 #include <stdio.h>
-#include <ApolloSM/ApolloSM.hh>
-#include <uhal/uhal.hpp>
-#include <vector>
 #include <string>
-#include <boost/tokenizer.hpp>
-#include <unistd.h> // usleep, execl
-#include <signal.h>
-#include <time.h>
+#include <vector>
+#include <ApolloSM/ApolloSM.hh>
+#include <standalone/userCount.hh>
+#include <standalone/lnxSysMon.hh>
 
-#include <sys/stat.h> //for umask
-#include <sys/types.h> //for umask
+#include <errno.h>
+#include <string.h>
+
+//pselect stuff
+#include <sys/select.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+//signals
+#include <signal.h>
+
+//umask
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #include <BUException/ExceptionBase.hh>
 
@@ -18,28 +29,27 @@
 
 #include <syslog.h>  ///for syslog
 #include <standalone/daemon.hh>       // daemonizeThisProgram // changeSignal // loop
-#include <standalone/parseOptions.hh> // setOptions // setParamValue // loadConfig
+#include <standalone/parseOptions.hh> // setOptions // setParamValues // loadConfig
 
 #define SEC_IN_US  1000000
 #define NS_IN_US 1000
 
 #define DEFAULT_POLLTIME_IN_SECONDS 10
-#define DEFAULT_CONFIG_FILE "/etc/htmlStatus"
+#define DEFAULT_CONFIG_FILE "/etc/ps_monitor"
 #define DEFAULT_RUN_DIR     "/opt/address_tables/"
-#define DEFAULT_PID_FILE    "/var/run/htmlStatus.pid"
+#define DEFAULT_PID_FILE    "/var/run/ps_monitor.pid"
 
-#define DEFAULT_OUTFILE     "/var/www/lighttpd/index.html"
-#define DEFAULT_LOG_LEVEL   1
-#define DEFAULT_OUTPUT_TYPE "HTML"
+
 
 // ====================================================================================================
-// signal handling
- //bool static volatile loop;
- //void static signal_handler(int const signum) {
- //  if(SIGINT == signum || SIGTERM == signum) {
- //    loop = false;
- //  }
- //}
+// Kill program if it is in background
+//bool static volatile loop;
+//
+//void static signal_handler(int const signum) {
+//  if(SIGINT == signum || SIGTERM == signum) {
+//    loop = false;
+//  }
+//}
 
 // ====================================================================================================
 long us_difftime(struct timespec cur, struct timespec end){ 
@@ -47,17 +57,15 @@ long us_difftime(struct timespec cur, struct timespec end){
 	   (end.tv_nsec - cur.tv_nsec)/NS_IN_US);
 }
 
+// ==================================================
 
-int main(int argc, char** argv) {
+int main(int argc, char ** argv) {
 
   // parameters to get from command line or config file (config file itself will not be in the config file, obviously)
   std::string configFile  = DEFAULT_CONFIG_FILE;
   std::string runPath     = DEFAULT_RUN_DIR;
   std::string pidFileName = DEFAULT_PID_FILE;
   int polltime_in_seconds = DEFAULT_POLLTIME_IN_SECONDS;
-  std::string outfile     = DEFAULT_OUTFILE;
-  int logLevel            = DEFAULT_LOG_LEVEL;
-  std::string outputType  = DEFAULT_OUTPUT_TYPE;
 
   // parse command line and config file to set parameters
   boost::program_options::options_description fileOptions{"File"}; // for parsing config file
@@ -66,12 +74,9 @@ int main(int argc, char** argv) {
     ("config_file",
      boost::program_options::value<std::string>(),
      "config_file"); // This is the only option not also in the file option (obviously)
-  setOption(&fileOptions, &commandLineOptions, "run_path"   , "run path"                , runPath);
-  setOption(&fileOptions, &commandLineOptions, "pid_file"   , "pid file"                , pidFileName);
-  setOption(&fileOptions, &commandLineOptions, "polltime"   , "polling interval"        , polltime_in_seconds);
-  setOption(&fileOptions, &commandLineOptions, "outfile"    , "html output file"        , outfile);
-  setOption(&fileOptions, &commandLineOptions, "log_level"  , "status display log level", outputType);
-  setOption(&fileOptions, &commandLineOptions, "output_type", "html output type"        , logLevel);
+  setOption(&fileOptions, &commandLineOptions, "run_path", "run path"         , runPath);
+  setOption(&fileOptions, &commandLineOptions, "pid_file", "pid file"         , pidFileName);
+  setOption(&fileOptions, &commandLineOptions, "polltime", "polling interval" , polltime_in_seconds);
   boost::program_options::variables_map configFileVM; // for parsing config file
   boost::program_options::variables_map commandLineVM; // for parsing command line
 
@@ -81,7 +86,7 @@ int main(int argc, char** argv) {
     // parse command line
     boost::program_options::store(boost::program_options::parse_command_line(argc, argv, commandLineOptions), commandLineVM);
   } catch(const boost::program_options::error &ex) {
-    fprintf(stderr, "Caught exception while parsing command line: %s. Try (--). ex: --polltime \nTerminating htmlStatus\n", ex.what());       
+    fprintf(stderr, "Caught exception while parsing command line: %s. Try (--). ex: --polltime \nTerminating ps_monitor\n", ex.what());       
     return -1;
   }
 
@@ -97,26 +102,21 @@ int main(int argc, char** argv) {
     // parse config file
     configFileVM = loadConfig(configFile, fileOptions);
   } catch(const boost::program_options::error &ex) {
-    fprintf(stdout, "Caught exception in function loadConfig(): %s \nTerminating htmlStatus\n", ex.what());        
+    fprintf(stdout, "Caught exception in function loadConfig(): %s \nTerminating ps_monitor\n", ex.what());        
     return -1;
   }
  
-
   // Look at the config file and command line and determine if we should change the parameters from their default values
   // Only run path and pid file are needed for the next bit of code. The other parameters can and should wait until syslog is available.
-  setParamValue(&runPath            , "run_path"     , configFileVM, commandLineVM, false);
-  setParamValue(&pidFileName        , "pid_file"     , configFileVM, commandLineVM, false);
+  setParamValue(&runPath    , "run_path", configFileVM, commandLineVM, false);
+  setParamValue(&pidFileName, "pid_file", configFileVM, commandLineVM, false);
 //  setParamValue(&polltime_in_seconds, "polltime"   , configFileVM, commandLineVM, true);
-//  setParamValue(&powerupCMuC        , "outfile"    , configFileVM, commandLineVM, true);
-//  setParamValue(&powerupTime        , "log_level"  , configFileVM, commandLineVM, true);
-//  setParamValue(&sensorsThroughZynq , "output_type", configFileVM, commandLineVM, true);  
 
   // ============================================================================
   // Deamon book-keeping
-  // Deamon book-keeping
   // Every daemon program should have one Daemon object. Daemon class functions are functions that all daemons progams have to perform. That is why we made the class.
-  Daemon htmlStatusDaemon;
-  htmlStatusDaemon.daemonizeThisProgram(pidFileName, runPath);
+  Daemon ps_monitorDaemon;
+  ps_monitorDaemon.daemonizeThisProgram(pidFileName, runPath);
 
 //  pid_t pid, sid;
 //  pid = fork();
@@ -162,25 +162,20 @@ int main(int argc, char** argv) {
 //  close(STDIN_FILENO);
 //  close(STDOUT_FILENO);
 //  close(STDERR_FILENO);
-//
+
   
-
-
   // ============================================================================
   // Now that syslog is available, we can continue to look at the config file and command line and determine if we should change the parameters from their default values.
-  setParamValue(&polltime_in_seconds, "polltime"   , configFileVM, commandLineVM, true);
-  setParamValue(&outfile            , "outfile"    , configFileVM, commandLineVM, true);
-  setParamValue(&logLevel           , "log_level"  , configFileVM, commandLineVM, true);
-  setParamValue(&outputType         , "output_type", configFileVM, commandLineVM, true);  
+  setParamValue(&polltime_in_seconds, "polltime", configFileVM, commandLineVM, true);
+
   // ============================================================================
   // Daemon code setup
 
   // ====================================
   // Signal handling
   struct sigaction sa_INT,sa_TERM,old_sa;
-  htmlStatusDaemon.changeSignal(&sa_INT , &old_sa, SIGINT);
-  htmlStatusDaemon.changeSignal(&sa_TERM, NULL   , SIGTERM);
-  
+  ps_monitorDaemon.changeSignal(&sa_INT , &old_sa, SIGINT);
+  ps_monitorDaemon.changeSignal(&sa_TERM, NULL   , SIGTERM);
 //  memset(&sa_INT ,0,sizeof(sa_INT)); //Clear struct
 //  memset(&sa_TERM,0,sizeof(sa_TERM)); //Clear struct
 //  //setup SA
@@ -190,18 +185,18 @@ int main(int argc, char** argv) {
 //  sigemptyset(&sa_TERM.sa_mask);
 //  sigaction(SIGINT,  &sa_INT , &old_sa);
 //  sigaction(SIGTERM, &sa_TERM, NULL);
-  htmlStatusDaemon.loop = true;
+  ps_monitorDaemon.loop = true;
 
-  // ====================================
-  // for counting time
-  struct timespec startTS;
-  struct timespec stopTS;
+  // ==================================================
+  // If /var/run/utmp does not exist we are done
+  {
+    FILE * file = fopen("/var/run/utmp","r");
+    if(NULL == file) {
+      syslog(LOG_INFO,"Utmp file does not exist. Terminating countUsers\n");
+      return -1;
+    }
+  }
 
-  long update_period_us = polltime_in_seconds*SEC_IN_US; //sleep time in microseconds
-
-
-
-  //Create ApolloSM class
   ApolloSM * SM = NULL;
   try{
     // ==================================
@@ -217,28 +212,62 @@ int main(int argc, char** argv) {
     arg.push_back("connections.xml");
     SM->Connect(arg);
 
+    //vars for pselect
+    fd_set readSet,readSet_ret;
+    FD_ZERO(&readSet);
+    struct timespec timeout = {polltime_in_seconds,0};
+    int maxFDp1 = 0;
+    
+    //Create a usercount process
+    userCount uCnt;
+    int fdUserCount = uCnt.initNotify();
+    syslog(LOG_INFO,"iNotify setup on FD %d\n",fdUserCount);
+    FD_SET(fdUserCount,&readSet);
+    if(fdUserCount >= maxFDp1){
+      maxFDp1 = fdUserCount+1;
+    }
+
+
     // ==================================
     // Main DAEMON loop
-    syslog(LOG_INFO,"Starting htmlStatus\n");
+    syslog(LOG_INFO,"Starting PS monitor\n");
 
-    while(htmlStatusDaemon.loop) {
-      // loop start time
-      clock_gettime(CLOCK_REALTIME, &startTS);
+    // ==================================================
+    // All the work
 
-      //=================================
-      //Do work
-      //=================================
-      std::string strOut;
-      //Generate HTML Status
-      strOut = SM->GenerateHTMLStatus(outfile, logLevel, outputType);
-      //=================================
-
-      // monitoring sleep
-      clock_gettime(CLOCK_REALTIME, &stopTS);
-      // sleep for 10 seconds minus how long it took to read and send temperature    
-      useconds_t sleep_us = update_period_us - us_difftime(startTS, stopTS);
-      if(sleep_us > 0){
-	usleep(sleep_us);
+    //Do one read of users file before we start our loop
+    uint32_t superUsers,normalUsers;
+    uCnt.GetUserCounts(superUsers,normalUsers);
+    SM->RegWriteRegister("PL_MEM.USERS_INFO.SUPER_USERS.COUNT",superUsers);
+    SM->RegWriteRegister("PL_MEM.USERS_INFO.USERS.COUNT",normalUsers);	  
+ 
+    while(ps_monitorDaemon.loop){
+      readSet_ret = readSet;
+      int pselRet = pselect(maxFDp1,&readSet_ret,NULL,NULL,&timeout,NULL);
+      if(0 == pselRet){
+	//timeout, do CPU/mem monitoring
+	uint32_t mon;
+	mon = MemUsage()*100; //Scale the value by 100 to get two decimal places for reg   
+	SM->RegWriteRegister("PL_MEM.ARM.MEM_USAGE",mon);
+	mon = CPUUsage()*100; //Scale the value by 100 to get two decimal places for reg   
+	SM->RegWriteRegister("PL_MEM.ARM.CPU_LOAD",mon);
+	float days,hours,minutes;
+	Uptime(days,hours,minutes);
+	SM->RegWriteRegister("PL_MEM.ARM.SYSTEM_UPTIME.DAYS",uint32_t(100.0*days));
+	SM->RegWriteRegister("PL_MEM.ARM.SYSTEM_UPTIME.HOURS",uint32_t(100.0*hours));
+	SM->RegWriteRegister("PL_MEM.ARM.SYSTEM_UPTIME.MINS",uint32_t(100.0*minutes));
+	
+      }else if(pselRet > 0){
+	//a FD is readable. 
+	if(FD_ISSET(fdUserCount,&readSet_ret)){
+	  if(uCnt.ProcessWatchEvent()){
+	    uCnt.GetUserCounts(superUsers,normalUsers);
+	    SM->RegWriteRegister("PL_MEM.USERS_INFO.SUPER_USERS.COUNT",superUsers);
+	    SM->RegWriteRegister("PL_MEM.USERS_INFO.USERS.COUNT",normalUsers);
+	  }
+	}
+      }else{
+	syslog(LOG_ERR,"Error in pselect %d(%s)",errno,strerror(errno));
       }
     }
   }catch(BUException::exBase const & e){
@@ -247,15 +276,17 @@ int main(int argc, char** argv) {
     syslog(LOG_ERR,"Caught std::exception: %s\n",e.what());          
   }
 
-  //Close ApolloSM and END
+  // ==================================================
+  // Clean up. Close and delete everything.
+
+  // Delete SM
   if(NULL != SM) {
     delete SM;
   }
 
   // Restore old action of receiving SIGINT (which is to kill program) before returning 
   sigaction(SIGINT, &old_sa, NULL);
-  syslog(LOG_INFO,"htmlStatus Daemon ended\n");
-  
-
+  syslog(LOG_INFO,"PS Monitor Daemon ended\n");
   return 0;
+
 }

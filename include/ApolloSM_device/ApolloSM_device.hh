@@ -49,8 +49,6 @@ namespace BUTool{
 
     //Add new command functions here
     
-    //   CommandReturn::status ListNodes(std::vector<std::string>,std::vector<uint64_t>);	   
-
     CommandReturn::status OpenFile(std::vector<std::string>,std::vector<uint64_t>);
     CommandReturn::status CloseFile(std::vector<std::string>,std::vector<uint64_t>);
     CommandReturn::status MrWuRegisterDump(std::vector<std::string>,std::vector<uint64_t>);
@@ -60,6 +58,7 @@ namespace BUTool{
     CommandReturn::status UART_Term(std::vector<std::string>,std::vector<uint64_t>);
     CommandReturn::status UART_CMD(std::vector<std::string>,std::vector<uint64_t>);
     CommandReturn::status GenerateHTMLStatus(std::vector<std::string>,std::vector<uint64_t>);
+    CommandReturn::status unblockAXI(std::vector<std::string>,std::vector<uint64_t>);
     
     //Add new command (sub command) auto-complete files here
     std::string autoComplete_Help(std::vector<std::string> const &,std::string const &,int);
@@ -69,6 +68,7 @@ namespace BUTool{
     CommandReturn::status CMPowerUP(std::vector<std::string>,std::vector<uint64_t>);
     CommandReturn::status CMPowerDown(std::vector<std::string>,std::vector<uint64_t>);
 
+    CommandReturn::status DumpDebug(std::vector<std::string>,std::vector<uint64_t>);
 
   };
   RegisterDevice(ApolloSMDevice,
