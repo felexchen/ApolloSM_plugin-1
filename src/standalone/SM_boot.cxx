@@ -156,8 +156,65 @@ void sendTemps(ApolloSM* SM, temperatures temps) {
 }
 
 // ====================================================================================================
+// Checks value of nodes and quits program if value was not the expected value
+bool checkNode(ApolloSM * SM, std::string node, int correctVal) {
+  bool GOOD = 1;
+  bool BAD = 0;
+
+  bool readVal;
+  if(correctVal != (readVal = SM->RegReadRegister(node))) {
+    syslog(LOG_ERR, "%s was %d\n", node.c_str(), readVal);
+    return BAD;
+  }
+  return GOOD;
+}
+
+// ====================================================================================================
+// Read firmware build date and hash
+void printBuildDate(ApolloSM * SM, int CM) {
+
+  // The masks according to BUTool "nodes"
+  uint32_t yearMask = 0xffff0000;
+  uint32_t monthMask = 0x0000ff00;
+  uint32_t dayMask = 0x000000ff;
+
+  if(1 == CM) {
+    // Kintex
+    std::string CM_K_BUILD = "CM_K_INFO.BUILD_DATE";
+    uint32_t CM_K_BUILD_DATE = SM->RegReadRegister(CM_K_BUILD);
+      
+    uint16_t yearK;
+    uint8_t monthK;
+    uint8_t dayK;
+    // Convert Kintex build dates from strings to ints
+    yearK = (CM_K_BUILD_DATE & yearMask) >> 16;
+    monthK = (CM_K_BUILD_DATE & monthMask) >> 8;
+    dayK = (CM_K_BUILD_DATE & dayMask);
+      
+    syslog(LOG_INFO, "Kintex firmware build date\nYYYY MM DD\n");
+    syslog(LOG_INFO, "%x %x %x", yearK, monthK, dayK);
+
+  } else if(2 == CM) {
+    // Virtex
+    std::string CM_V_BUILD = "CM_V_INFO.BUILD_DATE";
+    uint32_t CM_V_BUILD_DATE = SM->RegReadRegister(CM_V_BUILD);
+      
+    uint16_t yearV;
+    uint8_t monthV;
+    uint8_t dayV;    
+    // Convert Virtex build dates from strings to ints
+    yearV = (CM_V_BUILD_DATE & yearMask) >> 16;
+    monthV = (CM_V_BUILD_DATE & monthMask) >> 8;
+    dayV = (CM_V_BUILD_DATE & dayMask);
+      
+    syslog(LOG_INFO, "Virtex firmware build date\nYYYY/MM/DD\n");
+    syslog(LOG_INFO, "%x %x %x", yearV, monthV, dayV);
+  }
+}
+
+// ====================================================================================================
 // Program CM FPGAs
-int programCMFPGA(ApolloSM * SM, FILE * logFile, int CM_ID) {
+int programCMFPGA(ApolloSM * SM, int CM_ID) {
   bool NOFILE = 2;
   bool SUCCESS = 1;
   bool FAIL = 0;   
@@ -177,7 +234,7 @@ int programCMFPGA(ApolloSM * SM, FILE * logFile, int CM_ID) {
     FPGAinitial.append("V");
   default:
     fprintf(logFile, "Invalid CM ID: %d\n", CM_ID);
-    fflush(logFile);
+      
     // Maybe something less harsh
     return FAIL;
   }
@@ -188,18 +245,18 @@ int programCMFPGA(ApolloSM * SM, FILE * logFile, int CM_ID) {
     bool success = SM->PowerUpCM(CM_ID,wait_time);
     if(success) {
       fprintf(logFile, "CM %d is powered up\n", CM_ID);
-      fflush(logFile);
+        
     } else {
       fprintf(logFile, "CM %d failed to powered up in time\n", CM_ID);
-      fflush(logFile);
+        
     }
 
     std::string CM_CTRL = "CM.CM" + std::to_string(CM_ID) + ".CTRL.";
 
     // Check CM is actually powered up and "good". 1 is good 0 is bad.
-    if(!checkNode(SM, logFile, CM_CTRL + "PWR_GOOD",    1)) {return FAIL;}
-    if(!checkNode(SM, logFile, CM_CTRL + "ISO_ENABLED", 1)) {return FAIL;}
-    if(!checkNode(SM, logFile, CM_CTRL + "STATE",       4)) {return FAIL;}
+    if(!checkNode(SM, CM_CTRL + "PWR_GOOD",    1)) {return FAIL;}
+    if(!checkNode(SM, CM_CTRL + "ISO_ENABLED", 1)) {return FAIL;}
+    if(!checkNode(SM, CM_CTRL + "STATE",       4)) {return FAIL;}
 
     // Optionally run svfplayer commands to program CM FPGAs    
 
@@ -216,8 +273,8 @@ int programCMFPGA(ApolloSM * SM, FILE * logFile, int CM_ID) {
     std::string CM_C2C = "CM.CM" + std::to_string(CM_ID) + ".C2C.";
     
     // Check CM.CM*.C2C clocks are locked
-    if(!checkNode(SM, logFile, CM_C2C + "CPLL_LOCK",       1)) {return FAIL;}
-    if(!checkNode(SM, logFile, CM_C2C + "PHY_GT_PLL_LOCK", 1)) {return FAIL;}
+    if(!checkNode(SM, CM_C2C + "CPLL_LOCK",       1)) {return FAIL;}
+    if(!checkNode(SM, CM_C2C + "PHY_GT_PLL_LOCK", 1)) {return FAIL;}
     
     // Get FPGA out of error state
     SM->RegWriteRegister(CM_C2C + "INITIALIZE", 1);
@@ -225,29 +282,29 @@ int programCMFPGA(ApolloSM * SM, FILE * logFile, int CM_ID) {
     SM->RegWriteRegister(CM_C2C + "INITIALIZE", 0);
     
     // Check that phy lane is up, link is good, and that there are no errors.
-    if(!checkNode(SM, logFile, CM_C2C + "MB_ERROR",     0)) {return FAIL;}
-    if(!checkNode(SM, logFile, CM_C2C + "CONFIG_ERROR", 0)) {return FAIL;}
-    //if(!checkNode(SM, logFile, CM_C2C + "LINK_ERROR",   0)) {return FAIL;}
-    if(!checkNode(SM, logFile, CM_C2C + "PHY_HARD_ERR", 0)) {return FAIL;}
-    //if(!checkNode(SM, logFile, CM_C2C + "PHY_SOFT_ERR", 0)) {return FAIL;}
-    if(!checkNode(SM, logFile, CM_C2C + "PHY_MMCM_LOL", 0)) {return FAIL;} 
-    if(!checkNode(SM, logFile, CM_C2C + "PHY_LANE_UP",  1)) {return FAIL;}
-    if(!checkNode(SM, logFile, CM_C2C + "LINK_GOOD",    1)) {return FAIL;}
+    if(!checkNode(SM, CM_C2C + "MB_ERROR",     0)) {return FAIL;}
+    if(!checkNode(SM, CM_C2C + "CONFIG_ERROR", 0)) {return FAIL;}
+    //if(!checkNode(SM, CM_C2C + "LINK_ERROR",   0)) {return FAIL;}
+    if(!checkNode(SM, CM_C2C + "PHY_HARD_ERR", 0)) {return FAIL;}
+    //if(!checkNode(SM, CM_C2C + "PHY_SOFT_ERR", 0)) {return FAIL;}
+    if(!checkNode(SM, CM_C2C + "PHY_MMCM_LOL", 0)) {return FAIL;} 
+    if(!checkNode(SM, CM_C2C + "PHY_LANE_UP",  1)) {return FAIL;}
+    if(!checkNode(SM, CM_C2C + "LINK_GOOD",    1)) {return FAIL;}
     
     // Write to the "unblock" bits of the AXI*_FW slaves
     SM->RegWriteRegister("C2C" + std::to_string(CM_ID) + "_AXI_FW.UNBLOCK", 1);
     SM->RegWriteRegister("C2C" + std::to_string(CM_ID) + "_AXILITE_FW.UNBLOCK", 1);
     
     // Print firmware build date for FPGA
-    printBuildDate(SM, logFile, CM_ID);
+    printBuildDate(SM, CM_ID);
     
   } catch(BUException::exBase const & e) {
     fprintf(logFile, "Caught BUException: %s\n   Info: %s\n", e.what(), e.Description());
-    fflush(logFile);
+      
     return FAIL;
   } catch (std::exception const & e) {
     fprintf(logFile, "Caught std::exception: %s\n", e.what());
-    fflush(logFile);
+      
     return FAIL;
     }
     
@@ -396,27 +453,26 @@ int main(int argc, char** argv) {
     int firstCM_ID = 1;
     int lastCM_ID = 2;
     for(int i = firstCM_ID; i <= lastCM_ID; i++) {
-      switch(programCMFPGA(SM, logFile, i)) {
+      switch(programCMFPGA(SM, i)) {
       case 0:
-	      //  fail
-	      return 0;
+	//  fail
+	return 0;
       case 1: 
-	      // success
-	      break;
+	// success
+	break;
       case 2:
-	      // A CM file does not exist
-	      fprintf(logFile, "CM %dfile does not exist\n", i);
-	      fflush(logFile);
-	      break;
+	// A CM file does not exist
+	fprintf(logFile, "CM %dfile does not exist\n", i);	
+	break;
       }
     }
-
+    
     // Do we set this bit if the CM files do not exist?
     //Set the power-up done bit to 1 for the IPMC to read
 #ifdef SAY_STATUS_DONE_ANYWAY
     SM->RegWriteRegister("SLAVE_I2C.S1.SM.STATUS.DONE",1);
     fprintf(logFile,"Set STATUS.DONE to 1\n");
-    fflush(logFile);
+    
 #endif
 
     // ==================================
