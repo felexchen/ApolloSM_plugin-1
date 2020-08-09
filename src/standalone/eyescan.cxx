@@ -151,7 +151,7 @@ int main(int argc, char** argv) {
       syslog(LOG_INFO,"Created new ApolloSM\n");      
     }
     std::vector<std::string> arg;
-    arg.push_back("/opt/address_tables/connections.xml");
+    arg.push_back("/opt/address_table/connections.xml");
     SM->Connect(arg);    
     // ==================================
     // More set up if needed.
